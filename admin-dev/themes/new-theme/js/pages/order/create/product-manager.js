@@ -212,7 +212,7 @@ export default class ProductManager {
     }
 
     const $searchRequest = $.get(
-      this.router.generate('admin_products_search'),
+      this.router.generate('admin_orders_products_search'),
       params,
     );
     this.activeSearchRequest = $searchRequest;
@@ -280,7 +280,10 @@ export default class ProductManager {
     const combination = this.selectedProduct.combinations[combinationId];
 
     this.selectedCombinationId = combinationId;
-    this.productRenderer.renderStock(combination.stock);
+    this.productRenderer.renderStock(
+      combination.stock,
+      this.selectedProduct.availableOutOfStock || (combination.stock <= 0),
+    );
 
     return combination;
   }

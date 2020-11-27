@@ -35,7 +35,6 @@
 @import "components/notifications";
 @import "components/datepicker";
 @import "components/colorpicker";
-@import "components/help_box";
 @import "components/hint_box";
 @import "components/ps_dropdown";
 @import "components/ps_number";
@@ -68,6 +67,8 @@
 @import "pages/order_states";
 @import "pages/attribute";
 @import "pages/customer_thread";
+@import "pages/customer";
+@import "pages/compromised";
 
 // Main Layout
 @import "pages/modules";
@@ -148,5 +149,20 @@ table.table {
 .translations-app {
   .modal-header {
     display: initial;
+  }
+}
+
+.birthday-select-container {
+  .custom-select.form-control {
+    width: 100%;
+  }
+}
+
+/// Need this in order for material choice table select boxes to be aligned correctly
+.choice-table {
+  .table {
+    .form-check {
+      padding-left: 0;
+    }
   }
 }

@@ -401,7 +401,7 @@ class Categories extends BOBasePage {
    * @returns {Promise<void>}
    */
   async goToEditHomeCategoryPage(page) {
-    await this.waitForSelectorAndClick(page, this.editHomeCategoryButton);
+    await this.clickAndWaitForNavigation(page, this.editHomeCategoryButton);
   }
 
   /* Pagination methods */
@@ -421,7 +421,11 @@ class Categories extends BOBasePage {
    * @returns {Promise<string>}
    */
   async selectPaginationLimit(page, number) {
-    await this.selectByVisibleText(page, this.paginationLimitSelect, number);
+    await Promise.all([
+      this.selectByVisibleText(page, this.paginationLimitSelect, number),
+      page.waitForNavigation({waitUntil: 'networkidle'}),
+    ]);
+
     return this.getPaginationLabel(page);
   }
 

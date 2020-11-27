@@ -26,9 +26,10 @@
 
 namespace PrestaShopBundle\Controller\Admin\Sell\Order;
 
+use Currency;
 use Exception;
 use InvalidArgumentException;
-use PrestaShop\PrestaShop\Core\Domain\Cart\Query\GetCartInformation;
+use PrestaShop\PrestaShop\Core\Domain\Cart\Query\GetCartForOrderCreation;
 use PrestaShop\PrestaShop\Core\Domain\CartRule\Exception\InvalidCartRuleDiscountValueException;
 use PrestaShop\PrestaShop\Core\Domain\CustomerMessage\Command\AddOrderCustomerMessageCommand;
 use PrestaShop\PrestaShop\Core\Domain\CustomerMessage\Exception\CannotSendEmailException;
@@ -72,10 +73,11 @@ use PrestaShop\PrestaShop\Core\Domain\Order\Query\GetOrderForViewing;
 use PrestaShop\PrestaShop\Core\Domain\Order\Query\GetOrderPreview;
 use PrestaShop\PrestaShop\Core\Domain\Order\QueryResult\OrderForViewing;
 use PrestaShop\PrestaShop\Core\Domain\Order\QueryResult\OrderPreview;
-use PrestaShop\PrestaShop\Core\Domain\Order\QueryResult\OrderProductCustomizationForViewing;
 use PrestaShop\PrestaShop\Core\Domain\Order\QueryResult\OrderProductForViewing;
 use PrestaShop\PrestaShop\Core\Domain\Order\ValueObject\OrderId;
 use PrestaShop\PrestaShop\Core\Domain\Product\Exception\ProductOutOfStockException;
+use PrestaShop\PrestaShop\Core\Domain\Product\Query\SearchProducts;
+use PrestaShop\PrestaShop\Core\Domain\Product\QueryResult\FoundProduct;
 use PrestaShop\PrestaShop\Core\Form\ConfigurableFormChoiceProviderInterface;
 use PrestaShop\PrestaShop\Core\Grid\Definition\Factory\OrderGridDefinitionFactory;
 use PrestaShop\PrestaShop\Core\Multistore\MultistoreContextCheckerInterface;
@@ -212,9 +214,11 @@ class OrderController extends FrameworkBundleAdminController
      *
      * @AdminSecurity("is_granted('create', request.get('_legacy_controller'))")
      *
+     * @param Request $request
+     *
      * @return Response
      */
-    public function createAction()
+    public function createAction(Request $request)
     {
         /** @var MultistoreContextCheckerInterface $shopContextChecker */
         $shopContextChecker = $this->container->get('prestashop.adapter.shop.context');
@@ -232,10 +236,16 @@ class OrderController extends FrameworkBundleAdminController
         $languages = $this->get('prestashop.core.form.choice_provider.language_by_id')->getChoices();
         $currencies = $this->get('prestashop.core.form.choice_provider.currency_by_id')->getChoices();
 
+        $configuration = $this->get('prestashop.adapter.legacy.configuration');
+
         return $this->render('@PrestaShop/Admin/Sell/Order/Order/create.html.twig', [
             'currencies' => $currencies,
             'languages' => $languages,
             'summaryForm' => $summaryForm->createView(),
+            'help_link' => $this->generateSidebarLink($request->attributes->get('_legacy_controller')),
+            'enableSidebar' => true,
+            'recycledPackagingEnabled' => (bool) $configuration->get('PS_RECYCLABLE_PACK'),
+            'giftSettingsEnabled' => (bool) $configuration->get('PS_GIFT_WRAPPING'),
         ]);
     }
 
@@ -661,6 +671,11 @@ class OrderController extends FrameworkBundleAdminController
      */
     public function addProductAction(int $orderId, Request $request): Response
     {
+        /** @var OrderForViewing $orderForViewing */
+        $orderForViewing = $this->getQueryBus()->handle(new GetOrderForViewing($orderId));
+
+        $previousProducts = $orderForViewing->getProducts()->getProducts();
+
         $invoiceId = (int) $request->get('invoice_id');
         try {
             if ($invoiceId > 0) {
@@ -699,8 +714,11 @@ class OrderController extends FrameworkBundleAdminController
         /** @var OrderForViewing $orderForViewing */
         $orderForViewing = $this->getQueryBus()->handle(new GetOrderForViewing($orderId));
 
-        $products = $orderForViewing->getProducts()->getProducts();
-        $lastProduct = $products[array_key_last($products)];
+        $updatedProducts = $orderForViewing->getProducts()->getProducts();
+        $newProducts = [];
+        for ($i = count($previousProducts); $i < count($updatedProducts); ++$i) {
+            $newProducts[] = $updatedProducts[$i];
+        }
 
         $formBuilder = $this->get('prestashop.core.form.identifiable_object.builder.cancel_product_form_builder');
         $cancelProductForm = $formBuilder->getFormFor($orderId);
@@ -708,14 +726,19 @@ class OrderController extends FrameworkBundleAdminController
         $currencyDataProvider = $this->container->get('prestashop.adapter.data_provider.currency');
         $orderCurrency = $currencyDataProvider->getCurrencyById($orderForViewing->getCurrencyId());
 
-        return $this->render('@PrestaShop/Admin/Sell/Order/Order/Blocks/View/product.html.twig', [
-            'orderForViewing' => $orderForViewing,
-            'product' => $lastProduct,
-            'isColumnLocationDisplayed' => $lastProduct->getLocation() !== '',
-            'isColumnRefundedDisplayed' => $lastProduct->getQuantityRefunded() > 0,
-            'cancelProductForm' => $cancelProductForm->createView(),
-            'orderCurrency' => $orderCurrency,
-        ]);
+        $addedGridRows = '';
+        foreach ($newProducts as $newProduct) {
+            $addedGridRows .= $this->renderView('@PrestaShop/Admin/Sell/Order/Order/Blocks/View/product.html.twig', [
+                'orderForViewing' => $orderForViewing,
+                'product' => $newProduct,
+                'isColumnLocationDisplayed' => $newProduct->getLocation() !== '',
+                'isColumnRefundedDisplayed' => $newProduct->getQuantityRefunded() > 0,
+                'cancelProductForm' => $cancelProductForm->createView(),
+                'orderCurrency' => $orderCurrency,
+            ]);
+        }
+
+        return new Response($addedGridRows);
     }
 
     /**
@@ -935,6 +958,11 @@ class OrderController extends FrameworkBundleAdminController
             return $item->getOrderDetailId() == $orderDetailId ? $item : $result;
         });
 
+        // The whole product row has been removed so we return an empty response
+        if (null === $product) {
+            return new Response('');
+        }
+
         $formBuilder = $this->get('prestashop.core.form.identifiable_object.builder.cancel_product_form_builder');
         $cancelProductForm = $formBuilder->getFormFor($orderId);
 
@@ -1150,7 +1178,10 @@ class OrderController extends FrameworkBundleAdminController
         $cartId = $this->getCommandBus()->handle(new DuplicateOrderCartCommand($orderId))->getValue();
 
         return $this->json(
-            $this->getQueryBus()->handle(new GetCartInformation($cartId))
+            $this->getQueryBus()->handle(
+                (new GetCartForOrderCreation($cartId))
+                    ->setHideDiscounts(true)
+            )
         );
     }
 
@@ -1392,7 +1423,7 @@ class OrderController extends FrameworkBundleAdminController
      *
      * @param int $orderId
      *
-     * @return JsonResponse
+     * @return Response
      */
     public function getDiscountsAction(int $orderId): Response
     {
@@ -1549,17 +1580,15 @@ class OrderController extends FrameworkBundleAdminController
      * @AdminSecurity("is_granted('read', request.get('_legacy_controller'))")
      *
      * @param int $orderId
-     * @param int $type
      * @param string $name
      * @param string $value
      *
      * @return BinaryFileResponse|RedirectResponse
      */
-    public function displayCustomizationImageAction(int $orderId, int $type, string $name, string $value)
+    public function displayCustomizationImageAction(int $orderId, string $name, string $value)
     {
         $uploadDir = $this->get('prestashop.adapter.legacy.context')->getUploadDirectory();
-        $customizationForViewing = new OrderProductCustomizationForViewing($type, $name, $value);
-        $filePath = $uploadDir . $customizationForViewing->getValue();
+        $filePath = $uploadDir . $value;
         $filesystem = new Filesystem();
 
         try {
@@ -1630,6 +1659,45 @@ class OrderController extends FrameworkBundleAdminController
         return $this->redirectToRoute('admin_orders_view', [
             'orderId' => $orderId,
         ]);
+    }
+
+    /**
+     * @AdminSecurity(
+     *     "is_granted(['create', 'update'], request.get('_legacy_controller'))",
+     *     message="You do not have permission to perform this search."
+     * )
+     *
+     * @param Request $request
+     *
+     * @return JsonResponse
+     */
+    public function searchProductsAction(Request $request): JsonResponse
+    {
+        try {
+            $defaultCurrencyId = (int) $this->get('prestashop.adapter.legacy.configuration')->get('PS_CURRENCY_DEFAULT');
+
+            $searchPhrase = $request->query->get('search_phrase');
+            $currencyId = $request->query->get('currency_id');
+            $currencyIsoCode = $currencyId !== null
+                ? Currency::getIsoCodeById((int) $currencyId)
+                : Currency::getIsoCodeById($defaultCurrencyId);
+            $orderId = null;
+            if ($request->query->has('order_id')) {
+                $orderId = (int) $request->query->get('order_id');
+            }
+
+            /** @var FoundProduct[] $foundProducts */
+            $foundProducts = $this->getQueryBus()->handle(new SearchProducts($searchPhrase, 10, $currencyIsoCode, $orderId));
+
+            return $this->json([
+                'products' => $foundProducts,
+            ]);
+        } catch (Exception $e) {
+            return $this->json(
+                [$e, 'message' => $this->getErrorMessageForException($e, [])],
+                Response::HTTP_INTERNAL_SERVER_ERROR
+            );
+        }
     }
 
     /**

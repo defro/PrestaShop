@@ -26,16 +26,23 @@
 
 namespace Tests\Integration\Behaviour\Features\Context;
 
+use Address;
 use AppKernel;
 use Cache;
+use Carrier;
+use Cart;
+use CartRule;
 use Category;
 use Context;
+use Currency;
 use Employee;
 use Language;
 use LegacyTests\PrestaShopBundle\Utils\DatabaseCreator;
 use Pack;
 use Product;
 use Symfony\Component\DependencyInjection\ContainerInterface;
+use TaxManagerFactory;
+use Tests\Resources\ResourceResetter;
 
 class CommonFeatureContext extends AbstractPrestaShopFeatureContext
 {
@@ -77,17 +84,23 @@ class CommonFeatureContext extends AbstractPrestaShopFeatureContext
     }
 
     /**
-     * This hook can be used to flag a feature for kernel reboot, this is useful
-     * to force recreation of services (e.g: when you add some currencies in the
-     * database, you may need to reset the CLDR related services to use the new ones)
+     * This hook can be used to flag a feature for kernel reboot
      *
      * @BeforeFeature @reboot-kernel-before-feature
      */
     public static function rebootKernelPrepareFeature()
     {
-        $realCacheDir = self::$kernel->getContainer()->getParameter('kernel.cache_dir');
-        $warmupDir = substr($realCacheDir, 0, -1) . ('_' === substr($realCacheDir, -1) ? '-' : '_');
-        self::$kernel->reboot($warmupDir);
+        self::rebootKernel();
+    }
+
+    /**
+     * This hook can be used to flag a scenario for kernel reboot
+     *
+     * @BeforeScenario @reboot-kernel-before-scenario
+     */
+    public static function rebootKernelBeforeScenario()
+    {
+        self::rebootKernel();
     }
 
     /**
@@ -101,20 +114,19 @@ class CommonFeatureContext extends AbstractPrestaShopFeatureContext
     }
 
     /**
-     * @AfterFeature @clear-downloads-after-feature
+     * @AfterFeature @reset-downloads-after-feature
      */
-    public static function clearDownloads(): void
+    public static function resetDownloads(): void
     {
-        $filesToSkip = [
-            _PS_DOWNLOAD_DIR_ . 'index.php',
-            _PS_DOWNLOAD_DIR_ . '.htaccess',
-        ];
+        (new ResourceResetter())->resetDownloads();
+    }
 
-        foreach (glob(_PS_DOWNLOAD_DIR_ . '*') as $file) {
-            if (is_file($file) && !in_array($file, $filesToSkip)) {
-                unlink($file);
-            }
-        }
+    /**
+     * @AfterFeature @reset-img-after-feature
+     */
+    public static function resetImgDir(): void
+    {
+        (new ResourceResetter())->resetImages();
     }
 
     /**
@@ -131,6 +143,25 @@ class CommonFeatureContext extends AbstractPrestaShopFeatureContext
     public static function clearCacheBeforeFeature()
     {
         self::clearCache();
+    }
+
+    /**
+     * @BeforeScenario @clear-cache-before-scenario
+     */
+    public static function clearCacheBeforeScenario()
+    {
+        self::clearCache();
+    }
+
+    /**
+     * This hook can be used to flag a scenario for database hard reset
+     *
+     * @BeforeScenario @reset-database-before-scenario
+     */
+    public static function cleanDatabaseHardPrepareScenario()
+    {
+        DatabaseCreator::restoreTestDB();
+        require_once _PS_ROOT_DIR_ . '/config/config.inc.php';
     }
 
     /**
@@ -155,15 +186,41 @@ class CommonFeatureContext extends AbstractPrestaShopFeatureContext
     }
 
     /**
+     * @Given I reboot kernel
+     */
+    public function rebootKernelOnDemand()
+    {
+        self::rebootKernel();
+    }
+
+    /**
+     * This method reboots Symfony kernel, this is used to force recreation of services
+     * (e.g: when you add some currencies in the database, you may need to reset the CLDR
+     * related services to use the new ones)
+     */
+    private static function rebootKernel(): void
+    {
+        $realCacheDir = self::$kernel->getContainer()->getParameter('kernel.cache_dir');
+        $warmupDir = substr($realCacheDir, 0, -1) . ('_' === substr($realCacheDir, -1) ? '-' : '_');
+        self::$kernel->reboot($warmupDir);
+    }
+
+    /**
      * Clears cache
      */
     private static function clearCache(): void
     {
+        Address::resetStaticCache();
         Cache::clear();
-        Pack::resetStaticCache();
+        Carrier::resetStaticCache();
+        Cart::resetStaticCache();
+        CartRule::resetStaticCache();
         Category::resetStaticCache();
+        Pack::resetStaticCache();
         Product::resetStaticCache();
         Language::resetCache();
+        Currency::resetStaticCache();
+        TaxManagerFactory::resetStaticCache();
         SharedStorage::getStorage()->clean();
     }
 }

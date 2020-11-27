@@ -24,7 +24,7 @@
  *}
 {block name='product_miniature_item'}
 <div itemprop="itemListElement" itemscope itemtype="http://schema.org/ListItem">
-  <meta itemprop="position" content="{$position}" />
+  {if isset($position)}<meta itemprop="position" content="{$position}" />{/if}
   <article class="product-miniature js-product-miniature" data-id-product="{$product.id_product}" data-id-product-attribute="{$product.id_product_attribute}" itemprop="item" itemscope itemtype="http://schema.org/Product">
     <div class="thumbnail-container">
       {block name='product_thumbnail'}
@@ -69,7 +69,15 @@
 
               {hook h='displayProductPriceBlock' product=$product type="before_price"}
 
-              <span class="price" aria-label="{l s='Price' d='Shop.Theme.Catalog'}">{$product.price}</span>
+              <span class="price" aria-label="{l s='Price' d='Shop.Theme.Catalog'}">
+                {capture name='custom_price'}{hook h='displayProductPriceBlock' product=$product type='custom_price' hook_origin='products_list'}{/capture}
+                {if '' !== $smarty.capture.custom_price}
+                  {$smarty.capture.custom_price nofilter}
+                {else}
+                  {$product.price}
+                {/if}
+              </span>
+
               <div itemprop="offers" itemscope itemtype="http://schema.org/Offer" class="invisible">
                 <meta itemprop="priceCurrency" content="{$currency.iso_code}" />
                 <meta itemprop="price" content="{$product.price_amount}" />

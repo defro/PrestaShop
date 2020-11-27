@@ -841,13 +841,14 @@ class Install extends AbstractInstall
             $employee->default_tab = 1;
             $employee->active = true;
             $employee->id_profile = 1;
-            $employee->id_lang = Configuration::get('PS_LANG_DEFAULT');
-            $employee->bo_menu = 1;
+            $employee->id_lang = (int) Configuration::get('PS_LANG_DEFAULT');
+            $employee->bo_menu = true;
             if (!$employee->add()) {
                 $this->setError($this->translator->trans('Cannot create admin account', [], 'Install'));
 
                 return false;
             }
+            Context::getContext()->employee = $employee;
         } else {
             $this->setError($this->translator->trans('Cannot create admin account', [], 'Install'));
 
@@ -1124,8 +1125,8 @@ class Install extends AbstractInstall
             }
         } else {
             $xml_loader = new XmlLoader();
-            $xml_loader->setTranslator($this->translator);
         }
+        $xml_loader->setTranslator($this->translator);
 
         // Install XML data (data/xml/ folder)
         $xml_loader->setFixturesPath($fixtures_path);

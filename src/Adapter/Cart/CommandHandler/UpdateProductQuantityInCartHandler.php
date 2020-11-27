@@ -31,15 +31,18 @@ use Cart;
 use Context;
 use Customer;
 use PrestaShop\PrestaShop\Adapter\Cart\AbstractCartHandler;
+use PrestaShop\PrestaShop\Adapter\ContextStateManager;
 use PrestaShop\PrestaShop\Core\Domain\Cart\Command\UpdateProductQuantityInCartCommand;
 use PrestaShop\PrestaShop\Core\Domain\Cart\CommandHandler\UpdateProductQuantityInCartHandlerInterface;
 use PrestaShop\PrestaShop\Core\Domain\Cart\Exception\CartConstraintException;
 use PrestaShop\PrestaShop\Core\Domain\Cart\Exception\CartException;
+use PrestaShop\PrestaShop\Core\Domain\Cart\Exception\MinimalQuantityException;
 use PrestaShop\PrestaShop\Core\Domain\Product\Exception\ProductException;
 use PrestaShop\PrestaShop\Core\Domain\Product\Exception\ProductNotFoundException;
 use PrestaShop\PrestaShop\Core\Domain\Product\Exception\ProductOutOfStockException;
 use PrestaShop\PrestaShop\Core\Domain\Product\ValueObject\ProductId;
 use Product;
+use Shop;
 
 /**
  * @internal
@@ -47,11 +50,48 @@ use Product;
 final class UpdateProductQuantityInCartHandler extends AbstractCartHandler implements UpdateProductQuantityInCartHandlerInterface
 {
     /**
+     * @var ContextStateManager
+     */
+    private $contextStateManager;
+
+    /**
+     * @param ContextStateManager $contextStateManager
+     */
+    public function __construct(ContextStateManager $contextStateManager)
+    {
+        $this->contextStateManager = $contextStateManager;
+    }
+
+    /**
      * {@inheritdoc}
      */
     public function handle(UpdateProductQuantityInCartCommand $command)
     {
         $cart = $this->getCart($command->getCartId());
+        $this->contextStateManager
+            ->setCart($cart)
+            ->setShop(new Shop($cart->id_shop))
+        ;
+
+        try {
+            $this->updateProductQuantityInCart($cart, $command);
+        } finally {
+            $this->contextStateManager->restorePreviousContext();
+        }
+    }
+
+    /**
+     * @param Cart $cart
+     * @param UpdateProductQuantityInCartCommand $command
+     *
+     * @throws CartConstraintException
+     * @throws CartException
+     * @throws ProductException
+     * @throws ProductNotFoundException
+     * @throws ProductOutOfStockException
+     */
+    private function updateProductQuantityInCart(Cart $cart, UpdateProductQuantityInCartCommand $command): void
+    {
         $previousQty = $this->findPreviousQuantityInCart($cart, $command);
         $qtyDiff = abs($command->getNewQuantity() - $previousQty);
 
@@ -97,7 +137,7 @@ final class UpdateProductQuantityInCartHandler extends AbstractCartHandler imple
                 Attribute::getAttributeMinimalQty($combinationIdValue) :
                 $product->minimal_quantity;
 
-            throw new CartException(sprintf('Minimum quantity of %d must be added to cart.', $minQuantity));
+            throw new MinimalQuantityException('Minimum quantity of %d must be added to cart.', $minQuantity);
         }
     }
 
@@ -182,15 +222,10 @@ final class UpdateProductQuantityInCartHandler extends AbstractCartHandler imple
      */
     private function findPreviousQuantityInCart(Cart $cart, UpdateProductQuantityInCartCommand $command): int
     {
-        $products = $cart->getProductsWithSeparatedGifts();
-
         $isCombination = ($command->getCombinationId() !== null);
         $isCustomization = ($command->getCustomizationId() !== null);
 
-        foreach ($products as $cartProduct) {
-            if (!empty($cartProduct['is_gift'])) {
-                continue;
-            }
+        foreach ($cart->getProducts() as $cartProduct) {
             $equalProductId = (int) $cartProduct['id_product'] === $command->getProductId()->getValue();
             if ($isCombination) {
                 if ($equalProductId && (int) $cartProduct['id_product_attribute'] === $command->getCombinationId()->getValue()) {

@@ -28,9 +28,11 @@ declare(strict_types=1);
 
 namespace Tests\Integration\Behaviour\Features\Context\Domain;
 
+use Address;
 use AdminController;
 use Behat\Gherkin\Node\TableNode;
 use Cart;
+use Configuration;
 use Context;
 use FrontController;
 use Order;
@@ -66,13 +68,14 @@ use PrestaShop\PrestaShop\Core\Domain\Product\Exception\ProductOutOfStockExcepti
 use PrestaShop\PrestaShop\Core\Domain\Product\Query\SearchProducts;
 use PrestaShop\PrestaShop\Core\Domain\Product\QueryResult\FoundProduct;
 use PrestaShop\PrestaShop\Core\Form\ChoiceProvider\OrderStateByIdChoiceProvider;
-use PrestaShop\PrestaShop\Core\Util\DateTime\DateTime;
 use PrestaShopCollection;
 use Product;
 use RuntimeException;
 use SpecificPrice;
 use stdClass;
 use Tax;
+use TaxCalculator;
+use TaxManagerFactory;
 use Tests\Integration\Behaviour\Features\Context\CommonFeatureContext;
 use Tests\Integration\Behaviour\Features\Context\SharedStorage;
 use Tests\Integration\Behaviour\Features\Context\Util\PrimitiveUtils;
@@ -172,15 +175,21 @@ class OrderFeatureContext extends AbstractDomainFeatureContext
     public function addProductsToOrderWithNewInvoiceAndTheFollowingDetails(string $orderReference, TableNode $table)
     {
         $orderId = SharedStorage::getStorage()->get($orderReference);
-
         $data = $table->getRowsHash();
+
         $productName = $data['name'];
         $product = $this->getProductByName($productName);
+
         $productId = $product->getProductId();
         if (isset($data['combination'])) {
             $combinationId = $this->getProductCombinationId($product, $data['combination']);
         } else {
             $combinationId = 0;
+        }
+
+        if (empty($data['price_tax_incl'])) {
+            $taxCalculator = $this->getProductTaxCalculator((int) $orderId, (int) $productId);
+            $data['price_tax_incl'] = !empty($taxCalculator) ? (string) $taxCalculator->addTaxes($data['price']) : $data['price'];
         }
 
         try {
@@ -193,7 +202,7 @@ class OrderFeatureContext extends AbstractDomainFeatureContext
                     $orderId,
                     $productId,
                     $combinationId,
-                    $data['price'],
+                    $data['price_tax_incl'],
                     $data['price'],
                     (int) $data['amount'],
                     $hasFreeShipping
@@ -272,7 +281,12 @@ class OrderFeatureContext extends AbstractDomainFeatureContext
             $combinationId = 0;
         }
 
-        $this->lastException = null;
+        if (empty($data['price_tax_incl'])) {
+            $taxCalculator = $this->getProductTaxCalculator((int) $orderId, $product->getProductId());
+            $data['price_tax_incl'] = !empty($taxCalculator) ? (string) $taxCalculator->addTaxes($data['price']) : $data['price'];
+        }
+
+        $this->cleanLastException();
         try {
             $this->getCommandBus()->handle(
                 AddProductToOrderCommand::toExistingInvoice(
@@ -280,7 +294,7 @@ class OrderFeatureContext extends AbstractDomainFeatureContext
                     (int) $orderInvoice->id,
                     (int) $product->getProductId(),
                     (int) $combinationId,
-                    $data['price'],
+                    $data['price_tax_incl'],
                     $data['price'],
                     (int) $data['amount']
                 )
@@ -318,6 +332,92 @@ class OrderFeatureContext extends AbstractDomainFeatureContext
                     $orderInvoice->{$invoiceField}
                 )
             );
+        }
+    }
+
+    /**
+     * @Then the :invoicePosition invoice from order :orderReference should have following shipping tax details:
+     *
+     * @param string $invoicePosition
+     * @param string $orderReference
+     * @param TableNode $table
+     */
+    public function checkInvoiceShippingTaxDetails(string $invoicePosition, string $orderReference, TableNode $table)
+    {
+        $orderId = SharedStorage::getStorage()->get($orderReference);
+        $invoiceShippingData = $table->getColumnsHash();
+
+        $order = new Order($orderId);
+        $orderInvoice = $this->getInvoiceFromOrder($order, $invoicePosition);
+        $invoiceShippingTaxDetails = $orderInvoice->getShippingTaxesBreakdown($order);
+
+        Assert::assertLessThanOrEqual(
+            count($invoiceShippingTaxDetails),
+            count($invoiceShippingData),
+            sprintf(
+                'Invalid number of tax details, expected at least %d instead of %d',
+                count($invoiceShippingData),
+                count($invoiceShippingTaxDetails)
+            )
+        );
+
+        foreach ($invoiceShippingData as $invoiceShippingIndex => $invoiceShippingDetails) {
+            $shippingTaxDetails = $invoiceShippingTaxDetails[$invoiceShippingIndex];
+            foreach ($invoiceShippingDetails as $shippingField => $shippingValue) {
+                Assert::assertEquals(
+                    (float) $shippingValue,
+                    (float) $shippingTaxDetails[$shippingField],
+                    sprintf(
+                        'Invalid order tax field %s, expected %s instead of %s',
+                        $shippingField,
+                        $shippingValue,
+                        (float) $shippingTaxDetails[$shippingField]
+                    )
+                );
+            }
+        }
+    }
+
+    /**
+     * @Then the :invoicePosition invoice from order :orderReference should have following product tax details:
+     *
+     * @param string $invoicePosition
+     * @param string $orderReference
+     * @param TableNode $table
+     */
+    public function checkInvoiceProductTaxDetails(string $invoicePosition, string $orderReference, TableNode $table)
+    {
+        $orderId = SharedStorage::getStorage()->get($orderReference);
+        $invoiceProductData = $table->getColumnsHash();
+
+        $order = new Order($orderId);
+        $orderInvoice = $this->getInvoiceFromOrder($order, $invoicePosition);
+        $invoiceProductTaxDetails = array_values($orderInvoice->getProductTaxesBreakdown($order));
+
+        Assert::assertLessThanOrEqual(
+            count($invoiceProductTaxDetails),
+            count($invoiceProductData),
+            sprintf(
+                'Invalid number of product tax details, expected at least %d instead of %d',
+                count($invoiceProductData),
+                count($invoiceProductTaxDetails)
+            )
+        );
+
+        foreach ($invoiceProductData as $invoiceProductIndex => $invoiceProductDetails) {
+            $productTaxDetails = $invoiceProductTaxDetails[$invoiceProductIndex];
+            foreach ($invoiceProductDetails as $taxField => $taxValue) {
+                Assert::assertEquals(
+                    (float) $taxValue,
+                    (float) $productTaxDetails[$taxField],
+                    sprintf(
+                        'Invalid order tax field %s, expected %s instead of %s',
+                        $taxField,
+                        $taxValue,
+                        (float) $productTaxDetails[$taxField]
+                    )
+                );
+            }
         }
     }
 
@@ -543,12 +643,18 @@ class OrderFeatureContext extends AbstractDomainFeatureContext
             $invoiceId = (int) $invoice->id;
         }
 
+        // if tax included price is not given, it is calculated
+        if (!isset($data['price_tax_incl'])) {
+            $taxCalculator = $this->getProductTaxCalculator($orderId, (int) $productOrderDetail['product_id']);
+            $data['price_tax_incl'] = !empty($taxCalculator) ? (string) $taxCalculator->addTaxes($data['price']) : $data['price'];
+        }
+
         try {
             $this->getCommandBus()->handle(
                 new UpdateProductInOrderCommand(
                     (int) $orderId,
                     (int) $productOrderDetail['id_order_detail'],
-                    $data['price'],
+                    $data['price_tax_incl'],
                     $data['price'],
                     (int) $data['amount'],
                     $invoiceId
@@ -657,6 +763,26 @@ class OrderFeatureContext extends AbstractDomainFeatureContext
     }
 
     /**
+     * @Then order :orderReference has :statusNb status(es) in history
+     *
+     * @param string $orderReference
+     * @param int $statusNb
+     *
+     * @throws RuntimeException
+     */
+    public function countOrderStatus(string $orderReference, int $statusNb)
+    {
+        $orderId = SharedStorage::getStorage()->get($orderReference);
+
+        /** @var OrderForViewing $orderForViewing */
+        $orderForViewing = $this->getQueryBus()->handle(new GetOrderForViewing($orderId));
+        $actualStatusNb = count($orderForViewing->getHistory()->getStatuses());
+        if ($statusNb !== $actualStatusNb) {
+            throw new RuntimeException(sprintf('Incorrect number of statuses in history expected %d but got %d instead', $statusNb, $actualStatusNb));
+        }
+    }
+
+    /**
      * @When I update order :orderReference status to :status
      *
      * @param string $orderReference
@@ -718,6 +844,22 @@ class OrderFeatureContext extends AbstractDomainFeatureContext
         if (null === $discount) {
             throw new RuntimeException('Order should have free shipping.');
         }
+    }
+
+    /**
+     * @Then order :reference should be a gift with message :message
+     *
+     * @param string $reference
+     * @param string $message
+     */
+    public function createdOrderShouldBeAGift(string $reference, string $message)
+    {
+        $orderId = SharedStorage::getStorage()->get($reference);
+
+        /** @var OrderForViewing $orderForViewing */
+        $orderForViewing = $this->getQueryBus()->handle(new GetOrderForViewing($orderId));
+        Assert::assertTrue($orderForViewing->getShipping()->isGiftWrapping());
+        Assert::assertEquals($message, $orderForViewing->getShipping()->getGiftMessage());
     }
 
     /**
@@ -949,6 +1091,35 @@ class OrderFeatureContext extends AbstractDomainFeatureContext
     }
 
     /**
+     * @Then the product :productName in the :invoicePosition invoice from the order :orderReference should have the following details:
+     *
+     * @param string $orderReference
+     * @param string $productName
+     */
+    public function checkProductDetailsInInvoiceWithReference(string $productName, string $invoicePosition, string $orderReference, TableNode $table)
+    {
+        $orderId = SharedStorage::getStorage()->get($orderReference);
+        $order = new Order($orderId);
+        $orderInvoice = $this->getInvoiceFromOrder($order, $invoicePosition);
+
+        $productOrderDetail = $this->getOrderDetailFromOrder($productName, $orderReference, null, $orderInvoice->id);
+        $expectedDetails = $table->getRowsHash();
+        foreach ($expectedDetails as $detailName => $expectedDetailValue) {
+            Assert::assertEquals(
+                (float) $expectedDetailValue,
+                $productOrderDetail[$detailName],
+                sprintf(
+                    'Invalid product detail field %s for product %s, expected %s instead of %s',
+                    $detailName,
+                    $productName,
+                    $expectedDetailValue,
+                    $productOrderDetail[$detailName]
+                )
+            );
+        }
+    }
+
+    /**
      * @Then /^I watch the stock of product "(.+)"$/
      *
      * This statement must be called to store an initial stock for a product which then
@@ -1149,7 +1320,7 @@ class OrderFeatureContext extends AbstractDomainFeatureContext
     }
 
     /**
-     * @When I change order :orderReference note to :internalNote
+     * @When /^I change order "(.*)" note to "(.*)"$/
      *
      * @param string $orderReference
      * @param string $internalNote
@@ -1161,7 +1332,7 @@ class OrderFeatureContext extends AbstractDomainFeatureContext
     }
 
     /**
-     * @Then order :orderReference note should be :internalNote
+     * @Then /^order "(.*)" note should be "(.*)"$/
      *
      * @param string $orderReference
      * @param string $internalNote
@@ -1262,7 +1433,7 @@ class OrderFeatureContext extends AbstractDomainFeatureContext
             $specificPrice->price
         );
         Assert::assertEquals('amount', $specificPrice->reduction_type);
-        Assert::assertFalse((bool) $specificPrice->reduction_tax);
+        Assert::assertTrue((bool) $specificPrice->reduction_tax);
     }
 
     /**
@@ -1276,18 +1447,7 @@ class OrderFeatureContext extends AbstractDomainFeatureContext
     {
         $order = new Order($orderId);
 
-        $specificPriceId = SpecificPrice::exists(
-            $productId,
-            $combinationId,
-            0,
-            0,
-            0,
-            $order->id_currency,
-            $order->id_customer,
-            1,
-            DateTime::NULL_VALUE,
-            DateTime::NULL_VALUE
-        );
+        $specificPriceId = $order->getProductSpecificPriceId($productId, $combinationId);
 
         return $specificPriceId ? (int) $specificPriceId : null;
     }
@@ -1578,5 +1738,22 @@ class OrderFeatureContext extends AbstractDomainFeatureContext
         $this->assertLastErrorIs(
             CannotFindProductInOrderException::class
         );
+    }
+
+    /**
+     * @param int $orderId
+     *
+     * @return TaxCalculator|null
+     *
+     * @throws \PrestaShopDatabaseException
+     * @throws \PrestaShopException
+     */
+    private function getProductTaxCalculator(int $orderId, int $productId)
+    {
+        $order = new Order($orderId);
+        $taxAddress = new Address($order->{Configuration::get('PS_TAX_ADDRESS_TYPE', null, null, $order->id_shop)});
+        $taxManager = TaxManagerFactory::getManager($taxAddress, Product::getIdTaxRulesGroupByIdProduct((int) $productId, Context::getContext()));
+
+        return $taxManager->getTaxCalculator();
     }
 }

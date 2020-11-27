@@ -26,6 +26,7 @@
 
 namespace PrestaShop\PrestaShop\Adapter\Order;
 
+use Address;
 use Cart;
 use Combination;
 use Configuration;
@@ -34,17 +35,18 @@ use Currency;
 use Customer;
 use Group;
 use Order;
-use OrderDetail;
 use PrestaShop\Decimal\DecimalNumber;
+use PrestaShop\PrestaShop\Adapter\Number\RoundModeConverter;
 use PrestaShop\PrestaShop\Core\Domain\Order\Exception\OrderException;
 use PrestaShop\PrestaShop\Core\Domain\Order\Exception\OrderNotFoundException;
 use PrestaShop\PrestaShop\Core\Domain\Order\ValueObject\OrderId;
 use PrestaShop\PrestaShop\Core\Domain\Product\ValueObject\ProductId;
 use PrestaShop\PrestaShop\Core\Localization\CLDR\ComputingPrecision;
+use PrestaShopDatabaseException;
 use PrestaShopException;
 use Product;
 use SpecificPrice;
-use Tools;
+use TaxManagerFactory;
 use Validate;
 
 /**
@@ -193,7 +195,7 @@ abstract class AbstractOrderHandler
      * @param Combination|null $combination
      *
      * @throws PrestaShopException
-     * @throws \PrestaShopDatabaseException
+     * @throws PrestaShopDatabaseException
      */
     protected function updateSpecificPrice(
         DecimalNumber $priceTaxIncluded,
@@ -203,11 +205,10 @@ abstract class AbstractOrderHandler
         ?Combination $combination
     ): void {
         $productSpecificPrice = $this->getProductSpecificPriceInOrder($product, $order, $combination);
-
         $productOriginalPrice = $this->getProductRegularPrice($product, $order, $combination);
-        $roundedPrice = new DecimalNumber($priceTaxExcluded->round(self::COMPARISON_PRECISION));
 
-        if ($productOriginalPrice->equals($roundedPrice)) {
+        // If provided price is equal to catalog price no need to have specific price
+        if ($productOriginalPrice->equals($priceTaxExcluded)) {
             // Product specific price is not useful any more we can delete it
             if (null !== $productSpecificPrice) {
                 $productSpecificPrice->delete();
@@ -216,8 +217,11 @@ abstract class AbstractOrderHandler
             return;
         }
 
+        // If price tax excluded and price tax included don't match exactly, we use the price tax included as a base to recompute
+        // the price tax excluded, this gives us more precision and decimals which avoids offset in later computing (totals)
+        $precisePriceTaxExcluded = $this->getPrecisePriceTaxExcluded($priceTaxIncluded, $priceTaxExcluded, $order, $product);
         if (null !== $productSpecificPrice) {
-            $productSpecificPrice->price = $priceTaxExcluded;
+            $productSpecificPrice->price = (float) (string) $precisePriceTaxExcluded;
             $productSpecificPrice->update();
 
             return;
@@ -233,7 +237,7 @@ abstract class AbstractOrderHandler
         $specificPrice->id_customer = $order->id_customer;
         $specificPrice->id_product = $product->id;
         $specificPrice->id_product_attribute = $combination ? $combination->id : 0;
-        $specificPrice->price = (float) (string) $priceTaxExcluded;
+        $specificPrice->price = (float) (string) $precisePriceTaxExcluded;
         $specificPrice->from_quantity = SpecificPrice::ORDER_DEFAULT_FROM_QUANTITY;
         $specificPrice->reduction = 0;
         $specificPrice->reduction_type = 'amount';
@@ -241,6 +245,35 @@ abstract class AbstractOrderHandler
         $specificPrice->from = SpecificPrice::ORDER_DEFAULT_DATE;
         $specificPrice->to = SpecificPrice::ORDER_DEFAULT_DATE;
         $specificPrice->add();
+    }
+
+    /**
+     * @param DecimalNumber $priceTaxIncluded
+     * @param DecimalNumber $priceTaxExcluded
+     * @param Order $order
+     * @param Product $product
+     *
+     * @return DecimalNumber
+     */
+    private function getPrecisePriceTaxExcluded(
+        DecimalNumber $priceTaxIncluded,
+        DecimalNumber $priceTaxExcluded,
+        Order $order,
+        Product $product
+    ): DecimalNumber {
+        $taxAddress = new Address($order->{Configuration::get('PS_TAX_ADDRESS_TYPE', null, null, $order->id_shop)});
+        $taxManager = TaxManagerFactory::getManager($taxAddress, Product::getIdTaxRulesGroupByIdProduct((int) $product->id, Context::getContext()));
+        $productTaxCalculator = $taxManager->getTaxCalculator();
+        $taxFactor = new DecimalNumber((string) (1 + ($productTaxCalculator->getTotalRate() / 100)));
+
+        $computedPriceTaxIncluded = $priceTaxExcluded->times($taxFactor);
+        if ($computedPriceTaxIncluded->equals($priceTaxIncluded)) {
+            return $priceTaxExcluded;
+        }
+
+        // When price tax included is computed based on price tax excluded there is a difference
+        // so we recompute the price tax excluded based on the tax rate to have more precision
+        return $priceTaxIncluded->dividedBy($taxFactor);
     }
 
     /**
@@ -257,20 +290,7 @@ abstract class AbstractOrderHandler
     ): ?SpecificPrice {
         // WARNING: DO NOT use SpecificPrice::getSpecificPrice as it filters out fields that are not in database
         // hence it ignores the customer or cart restriction and results are biased
-        $existingSpecificPriceId = SpecificPrice::exists(
-            $product->id,
-            $combination ? $combination->id : 0,
-            0,
-            0,
-            0,
-            $order->id_currency,
-            $order->id_customer,
-            SpecificPrice::ORDER_DEFAULT_FROM_QUANTITY,
-            SpecificPrice::ORDER_DEFAULT_DATE,
-            SpecificPrice::ORDER_DEFAULT_DATE,
-            false,
-            $order->id_cart
-        );
+        $existingSpecificPriceId = $order->getProductSpecificPriceId($product->id, $combination ? $combination->id : 0);
 
         if (empty($existingSpecificPriceId)) {
             return null;
@@ -310,37 +330,28 @@ abstract class AbstractOrderHandler
     }
 
     /**
-     * Update order details after a specific price has been created or updated
-     *
-     * @param Order $order
-     * @param OrderDetail $updatedOrderDetail
-     * @param int $computingPrecision
-     *
-     * @throws \PrestaShopDatabaseException
-     * @throws \PrestaShopException
+     * @return string
      */
-    protected function updateOrderDetailsWithSameProduct(
-        Order $order,
-        OrderDetail $updatedOrderDetail,
-        int $computingPrecision
-    ): void {
-        foreach ($order->getOrderDetailList() as $row) {
-            $orderDetail = new OrderDetail($row['id_order_detail']);
-            if ((int) $orderDetail->product_id !== (int) $updatedOrderDetail->product_id) {
-                continue;
-            }
-            if (!empty($updatedOrderDetail->product_attribute_id) && (int) $updatedOrderDetail->product_attribute_id !== (int) $orderDetail->product_attribute_id) {
-                continue;
-            }
-            if ($updatedOrderDetail->id == $orderDetail->id) {
-                continue;
-            }
-            $orderDetail->unit_price_tax_excl = (float) $updatedOrderDetail->unit_price_tax_excl;
-            $orderDetail->unit_price_tax_incl = (float) $updatedOrderDetail->unit_price_tax_incl;
-            $orderDetail->total_price_tax_excl = Tools::ps_round((float) $updatedOrderDetail->unit_price_tax_excl * $orderDetail->product_quantity, $computingPrecision);
-            $orderDetail->total_price_tax_incl = Tools::ps_round((float) $updatedOrderDetail->unit_price_tax_incl * $orderDetail->product_quantity, $computingPrecision);
+    protected function getNumberRoundMode(): string
+    {
+        return RoundModeConverter::getNumberRoundMode((int) Configuration::get('PS_PRICE_ROUND_MODE'));
+    }
 
-            $orderDetail->update();
-        }
+    /**
+     * Delivery option consists of deliveryAddress and carrierId.
+     *
+     * Legacy multishipping feature used comma separated carriers in delivery option (e.g. {'1':'6,7'}
+     * Now that multishipping is gone - delivery option should consist of one carrier and one address.
+     *
+     * However the structure of deliveryOptions is still used with comma in legacy, so
+     * this method provides assurance for deliveryOption structure until major refactoring
+     *
+     * @param int $carrierId
+     *
+     * @return string
+     */
+    protected function formatLegacyDeliveryOptionFromCarrierId(int $carrierId): string
+    {
+        return sprintf('%d,', $carrierId);
     }
 }

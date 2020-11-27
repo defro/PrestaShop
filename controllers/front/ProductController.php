@@ -52,6 +52,11 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
     protected $quantity_discounts;
     protected $adminNotifications = [];
 
+    /**
+     * @var bool
+     */
+    protected $isQuickView = false;
+
     public function canonicalRedirection($canonical_url = '')
     {
         if (Validate::isLoadedObject($this->product)) {
@@ -334,7 +339,7 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
 
             $this->context->smarty->assign('packItems', $presentedPackItems);
             $this->context->smarty->assign('noPackPrice', $this->product->getNoPackPrice());
-            $this->context->smarty->assign('displayPackPrice', ($pack_items && $productPrice < $this->product->getNoPackPrice()) ? true : false);
+            $this->context->smarty->assign('displayPackPrice', ($pack_items && $productPrice < Pack::noPackPrice((int) $this->product->id)));
             $this->context->smarty->assign('packs', Pack::getPacksTable($this->product->id, $this->context->language->id, true, 1));
 
             $accessories = $this->product->getAccessories($this->context->language->id);
@@ -404,6 +409,9 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
         $productForTemplate = $this->getTemplateVarProduct();
         ob_end_clean();
         header('Content-Type: application/json');
+
+        $this->setQuickViewMode();
+
         $this->ajaxRender(Tools::jsonEncode([
             'quickview_html' => $this->render(
                 'catalog/_partials/quickview',
@@ -420,6 +428,11 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
         $product = $this->getTemplateVarProduct();
         $minimalProductQuantity = $this->getProductMinimalQuantity($product);
         $isPreview = ('1' === Tools::getValue('preview'));
+        $isQuickView = ('1' === Tools::getValue('quickview'));
+
+        if ($isQuickView) {
+            $this->setQuickViewMode();
+        }
 
         ob_end_clean();
         header('Content-Type: application/json');
@@ -455,8 +468,10 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
             'product_minimal_quantity' => $minimalProductQuantity,
             'product_has_combinations' => !empty($this->combinations),
             'id_product_attribute' => $product['id_product_attribute'],
-            // We use the meta_title key because product_title is used for the title of the page
-            'product_title' => $product['meta_title'],
+            'product_title' => $this->getProductPageTitle(
+                $this->getTemplateVarPage()['meta'] ?? []
+            ),
+            'is_quick_view' => $isQuickView,
         ]));
     }
 
@@ -680,9 +695,13 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
                             $id_product_attributes[] = $row['id_product_attribute'];
                         }
                     }
-                    $id_attributes = Db::getInstance()->executeS('SELECT `id_attribute` FROM `' . _DB_PREFIX_ . 'product_attribute_combination` pac2
-                        WHERE `id_product_attribute` IN (' . implode(',', array_map('intval', $id_product_attributes)) . ')
-                        AND id_attribute NOT IN (' . implode(',', array_map('intval', $current_selected_attributes)) . ')');
+                    $id_attributes = Db::getInstance()->executeS('SELECT pac2.`id_attribute` FROM `' . _DB_PREFIX_ . 'product_attribute_combination` pac2' .
+                        ((!Product::isAvailableWhenOutOfStock($this->product->out_of_stock) && 0 == Configuration::get('PS_DISP_UNAVAILABLE_ATTR')) ?
+                        ' INNER JOIN `' . _DB_PREFIX_ . 'stock_available` pa ON pa.id_product_attribute = pac2.id_product_attribute
+                        WHERE pa.quantity > 0 AND ' :
+                        ' WHERE ') .
+                        'pac2.`id_product_attribute` IN (' . implode(',', array_map('intval', $id_product_attributes)) . ')
+                        AND pac2.id_attribute NOT IN (' . implode(',', array_map('intval', $current_selected_attributes)) . ')');
                     foreach ($id_attributes as $k => $row) {
                         $id_attributes[$k] = (int) $row['id_attribute'];
                     }
@@ -973,15 +992,18 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
     private function tryToGetAvailableIdProductAttribute($checkedIdProductAttribute)
     {
         if (!Configuration::get('PS_DISP_UNAVAILABLE_ATTR')) {
-            $availableProductAttributes = $this->product->getAttributeCombinations();
+            $productCombinations = $this->product->getAttributeCombinations();
             if (!Product::isAvailableWhenOutOfStock($this->product->out_of_stock)) {
                 $availableProductAttributes = array_filter(
-                    $availableProductAttributes,
+                    $productCombinations,
                     function ($elem) {
                         return $elem['quantity'] > 0;
                     }
                 );
+            } else {
+                $availableProductAttributes = $productCombinations;
             }
+
             $availableProductAttribute = array_filter(
                 $availableProductAttributes,
                 function ($elem) use ($checkedIdProductAttribute) {
@@ -990,6 +1012,45 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
             );
 
             if (empty($availableProductAttribute) && count($availableProductAttributes)) {
+                // if selected combination is NOT available ($availableProductAttribute) but they are other alternatives ($availableProductAttributes), then we'll try to get the closest.
+                if (!Product::isAvailableWhenOutOfStock($this->product->out_of_stock)) {
+                    // first lets get information of the selected combination.
+                    $checkProductAttribute = array_filter(
+                        $productCombinations,
+                        function ($elem) use ($checkedIdProductAttribute) {
+                            return $elem['id_product_attribute'] == $checkedIdProductAttribute || (!$checkedIdProductAttribute && $elem['default_on']);
+                        }
+                    );
+                    if (count($checkProductAttribute)) {
+                        // now lets find other combinations for the selected attributes.
+                        $alternativeProductAttribute = [];
+                        foreach ($checkProductAttribute as $key => $attribute) {
+                            $alternativeAttribute = array_filter(
+                                $availableProductAttributes,
+                                function ($elem) use ($attribute) {
+                                    return $elem['id_attribute'] == $attribute['id_attribute'] && !$elem['is_color_group'];
+                                }
+                            );
+                            foreach ($alternativeAttribute as $key => $value) {
+                                $alternativeProductAttribute[$key] = $value;
+                            }
+                        }
+
+                        if (count($alternativeProductAttribute)) {
+                            // if alternative combination is found, order the list by quantity to use the one with more stock.
+                            usort($alternativeProductAttribute, function ($a, $b) {
+                                if ($a['quantity'] == $b['quantity']) {
+                                    return 0;
+                                }
+
+                                return ($a['quantity'] > $b['quantity']) ? -1 : 1;
+                            });
+
+                            return (int) array_shift($alternativeProductAttribute)['id_product_attribute'];
+                        }
+                    }
+                }
+
                 return (int) array_shift($availableProductAttributes)['id_product_attribute'];
             }
         }
@@ -1334,5 +1395,25 @@ class ProductControllerCore extends ProductPresentingFrontControllerCore
         }
 
         return false;
+    }
+
+    /**
+     * Return information whether we are or not in quick view mode.
+     *
+     * @return bool
+     */
+    public function isQuickView(): bool
+    {
+        return $this->isQuickView;
+    }
+
+    /**
+     * Set quick view mode.
+     *
+     * @param bool $enabled
+     */
+    public function setQuickViewMode(bool $enabled = true)
+    {
+        $this->isQuickView = $enabled;
     }
 }

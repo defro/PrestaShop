@@ -45,10 +45,10 @@ class Product extends BOBasePage {
     this.productsListTableColumnReference = row => `${this.productsListTableRow(row)} td:nth-child(5)`;
     this.productsListTableColumnCategory = row => `${this.productsListTableRow(row)} td:nth-child(6)`;
     this.productsListTableColumnPrice = row => `${this.productsListTableRow(row)} td:nth-child(7)`;
-    this.productsListTableColumnPriceTTC = row => `${this.productsListTableRow(row)} td:nth-child(8)`;
+    this.productsListTableColumnPriceATI = row => `${this.productsListTableRow(row)} td:nth-child(8)`;
     this.productsListTableColumnQuantity = row => `${this.productsListTableRow(row)} td.product-sav-quantity`;
-    this.productsListTableColumnStatus = row => `${this.productsListTableRow(row)} td:nth-child(10)`;
-    this.productsListTableColumnStatusEnabled = row => `${this.productsListTableColumnStatus(row)} .action-enabled`;
+    this.productsListTableColumnStatus = row => `${this.productsListTableRow(row)} td:nth-child(10) .ps-switch`;
+    this.productsListTableColumnStatusInput = row => `${this.productsListTableColumnStatus(row)} input`;
     // Filter Category
     this.treeCategoriesBloc = '#tree-categories';
     this.filterByCategoriesButton = '#product_catalog_category_tree_filter button';
@@ -150,7 +150,7 @@ class Product extends BOBasePage {
    * @returns {Promise<number>}
    */
   async getProductPriceFromList(page, row, withTaxes) {
-    const selector = withTaxes ? this.productsListTableColumnPriceTTC : this.productsListTableColumnPrice;
+    const selector = withTaxes ? this.productsListTableColumnPriceATI : this.productsListTableColumnPrice;
     const text = await this.getTextContent(page, selector(row));
     const price = /\d+(\.\d+)?/g.exec(text).toString();
     return parseFloat(price);
@@ -183,10 +183,16 @@ class Product extends BOBasePage {
    * Get Product Status
    * @param page
    * @param row
-   * @returns {Promise<string>}
+   * @returns {Promise<boolean>}
    */
   async getProductStatusFromList(page, row) {
-    return this.getTextContent(page, this.productsListTableColumnStatus(row));
+    const inputValue = await this.getAttributeContent(
+      page,
+      `${this.productsListTableColumnStatusInput(row)}[checked]`,
+      'value',
+    );
+
+    return inputValue !== '0';
   }
 
   /**
@@ -440,25 +446,14 @@ class Product extends BOBasePage {
   }
 
   /**
-   * Get Value of column Displayed
-   * @param page
-   * @param row, row in table
-   * @return {Promise<boolean>}
-   */
-  async getToggleColumnValue(page, row) {
-    return this.elementVisible(page, this.productsListTableColumnStatusEnabled(row), 100);
-  }
-
-  /**
    * Quick edit toggle column value
    * @param page
    * @param row, row in table
    * @param valueWanted, Value wanted in column
    * @return {Promise<boolean>} return true if action is done, false otherwise
    */
-  async updateToggleColumnValue(page, row, valueWanted = true) {
-    await this.waitForVisibleSelector(page, this.productsListTableColumnStatus(row), 2000);
-    const actualValue = await this.getToggleColumnValue(page, row);
+  async setProductStatus(page, row, valueWanted = true) {
+    const actualValue = await this.getProductStatusFromList(page, row);
     if (actualValue !== valueWanted) {
       await this.clickAndWaitForNavigation(page, this.productsListTableColumnStatus(row));
       return true;

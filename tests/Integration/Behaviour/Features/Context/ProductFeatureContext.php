@@ -28,7 +28,7 @@ namespace Tests\Integration\Behaviour\Features\Context;
 
 use Behat\Behat\Hook\Scope\BeforeScenarioScope;
 use Behat\Gherkin\Node\TableNode;
-use Cart;
+use Cache;
 use Combination;
 use Configuration;
 use Customization;
@@ -215,6 +215,10 @@ class ProductFeatureContext extends AbstractPrestaShopFeatureContext
 
         // Fix issue pack cache is set when adding products.
         Pack::resetStaticCache();
+        // Fix issue related to modules hooked on `actionProductSave` and calling `Product::priceCalculation()`
+        // leading to cache issues later
+        Product::resetStaticCache();
+        Cache::clear();
     }
 
     /**
@@ -255,6 +259,19 @@ class ProductFeatureContext extends AbstractPrestaShopFeatureContext
     {
         $this->checkProductWithNameExists($productName);
         $this->products[$productName]->weight = $weight;
+        $this->products[$productName]->save();
+    }
+
+    /**
+     * @Given /^the product "(.+)" minimal quantity is (\d+)$/
+     *
+     * @param string $productName
+     * @param int $minimalQty
+     */
+    public function setProductMinimalQuantity(string $productName, int $minimalQty)
+    {
+        $this->checkProductWithNameExists($productName);
+        $this->products[$productName]->minimal_quantity = $minimalQty;
         $this->products[$productName]->save();
     }
 

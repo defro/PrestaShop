@@ -29,14 +29,25 @@ declare(strict_types=1);
 namespace PrestaShop\PrestaShop\Adapter\Product\Repository;
 
 use Doctrine\DBAL\Connection;
+use PrestaShop\Decimal\DecimalNumber;
 use PrestaShop\PrestaShop\Adapter\AbstractObjectModelRepository;
 use PrestaShop\PrestaShop\Adapter\Product\Validate\ProductValidator;
+use PrestaShop\PrestaShop\Adapter\TaxRulesGroup\Repository\TaxRulesGroupRepository;
 use PrestaShop\PrestaShop\Core\Domain\Language\ValueObject\LanguageId;
+use PrestaShop\PrestaShop\Core\Domain\Product\Exception\CannotAddProductException;
 use PrestaShop\PrestaShop\Core\Domain\Product\Exception\CannotBulkDeleteProductException;
 use PrestaShop\PrestaShop\Core\Domain\Product\Exception\CannotDeleteProductException;
+use PrestaShop\PrestaShop\Core\Domain\Product\Exception\CannotDuplicateProductException;
 use PrestaShop\PrestaShop\Core\Domain\Product\Exception\CannotUpdateProductException;
+use PrestaShop\PrestaShop\Core\Domain\Product\Exception\ProductConstraintException;
+use PrestaShop\PrestaShop\Core\Domain\Product\Exception\ProductException;
 use PrestaShop\PrestaShop\Core\Domain\Product\Exception\ProductNotFoundException;
+use PrestaShop\PrestaShop\Core\Domain\Product\Pack\Exception\ProductPackConstraintException;
+use PrestaShop\PrestaShop\Core\Domain\Product\ProductTaxRulesGroupSettings;
+use PrestaShop\PrestaShop\Core\Domain\Product\Stock\Exception\ProductStockConstraintException;
 use PrestaShop\PrestaShop\Core\Domain\Product\ValueObject\ProductId;
+use PrestaShop\PrestaShop\Core\Domain\Shop\ValueObject\ShopId;
+use PrestaShop\PrestaShop\Core\Domain\TaxRulesGroup\ValueObject\TaxRulesGroupId;
 use PrestaShop\PrestaShop\Core\Exception\CoreException;
 use PrestaShopException;
 use Product;
@@ -62,18 +73,85 @@ class ProductRepository extends AbstractObjectModelRepository
     private $productValidator;
 
     /**
+     * @var int
+     */
+    private $defaultCategoryId;
+
+    /**
+     * @var TaxRulesGroupRepository
+     */
+    private $taxRulesGroupRepository;
+
+    /**
      * @param Connection $connection
      * @param string $dbPrefix
      * @param ProductValidator $productValidator
+     * @param int $defaultCategoryId
+     * @param TaxRulesGroupRepository $taxRulesGroupRepository
      */
     public function __construct(
         Connection $connection,
         string $dbPrefix,
-        ProductValidator $productValidator
+        ProductValidator $productValidator,
+        int $defaultCategoryId,
+        TaxRulesGroupRepository $taxRulesGroupRepository
     ) {
         $this->connection = $connection;
         $this->dbPrefix = $dbPrefix;
         $this->productValidator = $productValidator;
+        $this->defaultCategoryId = $defaultCategoryId;
+        $this->taxRulesGroupRepository = $taxRulesGroupRepository;
+    }
+
+    /**
+     * Duplicates product entity without relations
+     *
+     * @param Product $product
+     *
+     * @return Product
+     *
+     * @throws CoreException
+     * @throws CannotDuplicateProductException
+     * @throws ProductConstraintException
+     * @throws ProductException
+     */
+    public function duplicate(Product $product): Product
+    {
+        unset($product->id, $product->id_product);
+
+        $this->productValidator->validateCreation($product);
+        $this->productValidator->validate($product);
+        $this->addObjectModel($product, CannotDuplicateProductException::class);
+
+        return $product;
+    }
+
+    /**
+     * Gets product price by provided shop
+     *
+     * @param ProductId $productId
+     * @param ShopId $shopId
+     *
+     * @return DecimalNumber|null
+     */
+    public function getPriceByShop(ProductId $productId, ShopId $shopId): ?DecimalNumber
+    {
+        $qb = $this->connection->createQueryBuilder();
+        $qb->select('price')
+            ->from($this->dbPrefix . 'product_shop')
+            ->where('id_product = :productId')
+            ->andWhere('id_shop = :shopId')
+            ->setParameter('productId', $productId->getValue())
+            ->setParameter('shopId', $shopId->getValue())
+        ;
+
+        $result = $qb->execute()->fetch();
+
+        if (!$result) {
+            return null;
+        }
+
+        return new DecimalNumber($result['price']);
     }
 
     /**
@@ -119,11 +197,11 @@ class ProductRepository extends AbstractObjectModelRepository
      * @param ProductId $productId
      * @param LanguageId $languageId
      *
-     * @return array<string, string>
-     *                       e.g [
-     *                       ['id_product' => '1', 'name' => 'Product name', 'reference' => 'demo15'],
-     *                       ['id_product' => '2', 'name' => 'Product name2', 'reference' => 'demo16'],
-     *                       ]
+     * @return array<array<string, string>>
+     *                             e.g [
+     *                             ['id_product' => '1', 'name' => 'Product name', 'reference' => 'demo15'],
+     *                             ['id_product' => '2', 'name' => 'Product name2', 'reference' => 'demo16'],
+     *                             ]
      *
      * @throws CoreException
      */
@@ -160,6 +238,39 @@ class ProductRepository extends AbstractObjectModelRepository
             ProductNotFoundException::class
         );
 
+        try {
+            $product->loadStockData();
+        } catch (PrestaShopException $e) {
+            throw new CoreException(
+                sprintf('Error occurred when trying to load Product stock #%d', $productId->getValue()),
+                0,
+                $e
+            );
+        }
+
+        return $product;
+    }
+
+    /**
+     * @param array<int, string> $localizedNames
+     * @param bool $isVirtual
+     *
+     * @return Product
+     *
+     * @throws CannotAddProductException
+     */
+    public function create(array $localizedNames, bool $isVirtual): Product
+    {
+        $product = new Product();
+        $product->active = false;
+        $product->id_category_default = $this->defaultCategoryId;
+        $product->name = $localizedNames;
+        $product->is_virtual = $isVirtual;
+
+        $this->productValidator->validateCreation($product);
+        $this->addObjectModel($product, CannotAddProductException::class);
+        $product->addToCategories([$product->id_category_default]);
+
         return $product;
     }
 
@@ -169,9 +280,17 @@ class ProductRepository extends AbstractObjectModelRepository
      * @param int $errorCode
      *
      * @throws CoreException
+     * @throws ProductConstraintException
+     * @throws ProductPackConstraintException
+     * @throws ProductStockConstraintException
      */
     public function partialUpdate(Product $product, array $propertiesToUpdate, int $errorCode): void
     {
+        $taxRulesGroupId = (int) $product->id_tax_rules_group;
+        if ($taxRulesGroupId !== ProductTaxRulesGroupSettings::NONE_APPLIED) {
+            $this->taxRulesGroupRepository->assertTaxRulesGroupExists(new TaxRulesGroupId($taxRulesGroupId));
+        }
+
         $this->productValidator->validate($product);
         $this->partiallyUpdateObjectModel(
             $product,

@@ -30,9 +30,10 @@ namespace Tests\Integration\Behaviour\Features\Context\Domain\Product;
 
 use PHPUnit\Framework\Assert;
 use PrestaShop\PrestaShop\Core\Domain\Product\Command\AssociateProductAttachmentCommand;
+use PrestaShop\PrestaShop\Core\Domain\Product\Command\RemoveAllAssociatedProductAttachmentsCommand;
 use PrestaShop\PrestaShop\Core\Domain\Product\Command\SetAssociatedProductAttachmentsCommand;
 use RuntimeException;
-use Tests\Integration\Behaviour\Features\Context\Util\PrimitiveUtils;
+use Tests\Integration\Behaviour\Features\Transform\StringToArrayTransformContext;
 
 class UpdateAttachmentFeatureContext extends AbstractProductFeatureContext
 {
@@ -53,21 +54,22 @@ class UpdateAttachmentFeatureContext extends AbstractProductFeatureContext
     /**
      * @Then product :productReference should have following attachments associated: :attachmentReferences
      *
+     * attachmentReferences transformation handled by @see StringToArrayTransformContext
+     *
      * @param string $productReference
-     * @param string $attachmentReferences
+     * @param string[] $attachmentReferences
      */
-    public function assertProductAttachments(string $productReference, string $attachmentReferences): void
+    public function assertProductAttachments(string $productReference, array $attachmentReferences): void
     {
         $attachmentIds = $this->getProductForEditing($productReference)->getAssociatedAttachmentIds();
-        $expectedReferences = PrimitiveUtils::castStringArrayIntoArray($attachmentReferences);
 
         Assert::assertEquals(
             count($attachmentIds),
-            count($expectedReferences),
+            count($attachmentReferences),
             'Unexpected associated product attachments count'
         );
 
-        foreach ($expectedReferences as $key => $expectedReference) {
+        foreach ($attachmentReferences as $key => $expectedReference) {
             if ($attachmentIds[$key] === $this->getSharedStorage()->get($expectedReference)) {
                 continue;
             }
@@ -92,18 +94,23 @@ class UpdateAttachmentFeatureContext extends AbstractProductFeatureContext
     /**
      * @When I associate product :productReference with following attachments: :attachmentReferences
      *
+     * attachmentReferences transformation handled by @see StringToArrayTransformContext
+     *
      * @param string $productReference
-     * @param string $attachmentReferences
+     * @param string[] $attachmentReferences
      */
-    public function setAssociatedProductAttachments(string $productReference, string $attachmentReferences): void
+    public function setAssociatedProductAttachments(string $productReference, array $attachmentReferences): void
     {
         $attachmentIds = [];
 
-        foreach (PrimitiveUtils::castStringArrayIntoArray($attachmentReferences) as $attachmentReference) {
+        foreach ($attachmentReferences as $attachmentReference) {
             $attachmentIds[] = $this->getSharedStorage()->get($attachmentReference);
         }
 
-        $this->setProductAttachments($this->getSharedStorage()->get($productReference), $attachmentIds);
+        $this->getCommandBus()->handle(new SetAssociatedProductAttachmentsCommand(
+            $this->getSharedStorage()->get($productReference),
+            $attachmentIds
+        ));
     }
 
     /**
@@ -113,18 +120,8 @@ class UpdateAttachmentFeatureContext extends AbstractProductFeatureContext
      */
     public function removeProductAttachmentsAssociation(string $productReference)
     {
-        $this->setProductAttachments($this->getSharedStorage()->get($productReference), []);
-    }
-
-    /**
-     * @param int $productId
-     * @param array $attachmentIds
-     */
-    private function setProductAttachments(int $productId, array $attachmentIds): void
-    {
-        $this->getCommandBus()->handle(new SetAssociatedProductAttachmentsCommand(
-            $productId,
-            $attachmentIds
+        $this->getCommandBus()->handle(new RemoveAllAssociatedProductAttachmentsCommand(
+            $this->getSharedStorage()->get($productReference)
         ));
     }
 }

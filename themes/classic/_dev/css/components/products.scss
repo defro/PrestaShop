@@ -222,6 +222,7 @@
 .product-unit-price {
   margin-bottom: 0;
   font-size: $font-size-xs;
+  color: $brand-primary;
 }
 
 .tabs {
@@ -795,6 +796,10 @@
     .modal-body {
       padding: 1.875rem;
     }
+  }
+
+  .product-images > li.thumb-container > .thumb:not(.selected) {
+    border: none;
   }
 }
 

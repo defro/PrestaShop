@@ -67,14 +67,14 @@ class ProductConstraintException extends ProductException
     const INVALID_PRICE = 70;
 
     /**
-     * When invalid product ecotax is supplied
+     * When invalid product unity value is supplied
      */
-    const INVALID_ECOTAX = 80;
+    const INVALID_UNITY = 80;
 
     /**
-     * When invalid product tax rules group id is supplied
+     * When invalid product ecotax is supplied
      */
-    const INVALID_TAX_RULES_GROUP_ID = 90;
+    const INVALID_ECOTAX = 90;
 
     /**
      * When invalid product unit price is supplied
@@ -185,4 +185,39 @@ class ProductConstraintException extends ProductException
      * When product link rewrite is invalid
      */
     const INVALID_LINK_REWRITE = 310;
+
+    /**
+     * When product minimal quantity is invalid
+     */
+    const INVALID_MINIMAL_QUANTITY = 320;
+
+    /**
+     * When product location is invalid
+     */
+    const INVALID_LOCATION = 330;
+
+    /**
+     * When product available later labels are invalid
+     */
+    const INVALID_AVAILABLE_LATER = 340;
+
+    /**
+     * When product available now labels are is invalid
+     */
+    const INVALID_AVAILABLE_NOW = 350;
+
+    /**
+     * When product available date is invalid
+     */
+    const INVALID_AVAILABLE_DATE = 360;
+
+    /**
+     * When product low stock alert is invalid
+     */
+    const INVALID_LOW_STOCK_ALERT = 370;
+
+    /**
+     * When product low stock threshold is invalid
+     */
+    const INVALID_LOW_STOCK_THRESHOLD = 380;
 }

@@ -9,6 +9,11 @@
       font-weight: 600;
       line-height: 1.5;
     }
+
+    .card-details-actions {
+      display: flex;
+      align-items: center;
+    }
   }
 
   .add-product {
@@ -530,4 +535,10 @@ input#partial_refund_shipping {
 .cellProductActions .btn:hover,
 .discountList .btn:hover {
   color: $primary;
+}
+
+.discountList {
+  &-name {
+    max-width: 400px;
+  }
 }
