@@ -52,6 +52,7 @@ default:
                 - Tests\Integration\Behaviour\Features\Context\CategoryFeatureContext
                 - Tests\Integration\Behaviour\Features\Context\OrderFeatureContext
                 - Tests\Integration\Behaviour\Features\Context\ShopFeatureContext
+                - Tests\Integration\Behaviour\Features\Context\Domain\CartRuleFeatureContext
                 - Tests\Integration\Behaviour\Features\Context\Domain\CartFeatureContext
                 - Tests\Integration\Behaviour\Features\Context\CountryFeatureContext
                 - Tests\Integration\Behaviour\Features\Context\EmployeeFeatureContext
@@ -78,6 +79,7 @@ default:
                 - Tests\Integration\Behaviour\Features\Context\CarrierFeatureContext
                 - Tests\Integration\Behaviour\Features\Context\CountryFeatureContext
                 - Tests\Integration\Behaviour\Features\Context\Configuration\CommonConfigurationFeatureContext
+                - Tests\Integration\Behaviour\Features\Context\Configuration\RoundingTypeConfigurationFeatureContext
                 - Tests\Integration\Behaviour\Features\Context\Domain\OrderPaymentFeatureContext
                 - Tests\Integration\Behaviour\Features\Context\Domain\OrderShippingFeatureContext
                 - Tests\Integration\Behaviour\Features\Context\Domain\OrderCartFeatureContext
@@ -212,6 +214,7 @@ default:
         product:
             paths:
                 - %paths.base%/Features/Scenario/Product
+                - %paths.base%/Features/Scenario/Product/Combination
             contexts:
                 - Tests\Integration\Behaviour\Features\Context\CommonFeatureContext
                 - Tests\Integration\Behaviour\Features\Context\Configuration\CommonConfigurationFeatureContext
@@ -228,7 +231,6 @@ default:
                 - Tests\Integration\Behaviour\Features\Context\Domain\Product\UpdateProductSuppliersFeatureContext
                 - Tests\Integration\Behaviour\Features\Context\Domain\Product\UpdateSeoFeatureContext
                 - Tests\Integration\Behaviour\Features\Context\Domain\Product\UpdateStockFeatureContext
-                - Tests\Integration\Behaviour\Features\Context\Domain\Product\ProductCombinationFeatureContext
                 - Tests\Integration\Behaviour\Features\Context\LanguageFeatureContext
                 - Tests\Integration\Behaviour\Features\Context\Domain\TaxRulesGroupFeatureContext
                 - Tests\Integration\Behaviour\Features\Context\Domain\CategoryFeatureContext
@@ -250,3 +252,7 @@ default:
                 - Tests\Integration\Behaviour\Features\Transform\LocalizedArrayTransformContext
                 - Tests\Integration\Behaviour\Features\Context\Domain\AttributeGroupFeatureContext
                 - Tests\Integration\Behaviour\Features\Context\Domain\AttributeFeatureContext
+                - Tests\Integration\Behaviour\Features\Context\Domain\Product\Combination\CombinationListingFeatureContext
+                - Tests\Integration\Behaviour\Features\Context\Domain\Product\Combination\GenerateCombinationFeatureContext
+                - Tests\Integration\Behaviour\Features\Context\Domain\Product\Combination\UpdateCombinationOptionsFeatureContext
+                - Tests\Integration\Behaviour\Features\Context\Domain\Product\Combination\UpdateCombinationPricesFeatureContext

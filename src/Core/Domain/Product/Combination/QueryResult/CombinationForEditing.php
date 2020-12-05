@@ -29,62 +29,45 @@ declare(strict_types=1);
 namespace PrestaShop\PrestaShop\Core\Domain\Product\Combination\QueryResult;
 
 /**
- * Transfers combination data
+ * Transfers combination data for editing
  */
 class CombinationForEditing
 {
     /**
-     * @var int
+     * @var CombinationOptions
      */
-    private $combinationId;
+    private $options;
 
     /**
-     * @var CombinationAttributeInformation[]
+     * @var CombinationPrices
      */
-    private $attributesInformation;
+    private $prices;
 
     /**
-     * @var string
-     */
-    private $combinationName;
-
-    /**
-     * @param int $combinationId
-     * @param string $combinationName
-     * @param CombinationAttributeInformation[] $attributesInformation
-     * @todo: add additional properties when needed (for update command)
+     * @param CombinationOptions $options
+     * @param CombinationPrices $prices
      */
     public function __construct(
-        int $combinationId,
-        string $combinationName,
-        array $attributesInformation
+        CombinationOptions $options,
+        CombinationPrices $prices
     ) {
-        $this->combinationId = $combinationId;
-        $this->attributesInformation = $attributesInformation;
-        $this->combinationName = $combinationName;
+        $this->options = $options;
+        $this->prices = $prices;
     }
 
     /**
-     * @return int
+     * @return CombinationOptions
      */
-    public function getCombinationId(): int
+    public function getOptions(): CombinationOptions
     {
-        return $this->combinationId;
+        return $this->options;
     }
 
     /**
-     * @return CombinationAttributeInformation[]
+     * @return CombinationPrices
      */
-    public function getAttributesInformation(): array
+    public function getPrices(): CombinationPrices
     {
-        return $this->attributesInformation;
-    }
-
-    /**
-     * @return string
-     */
-    public function getCombinationName(): string
-    {
-        return $this->combinationName;
+        return $this->prices;
     }
 }

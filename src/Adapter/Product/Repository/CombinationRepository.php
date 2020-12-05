@@ -34,6 +34,7 @@ use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Query\QueryBuilder;
 use PrestaShop\PrestaShop\Adapter\AbstractObjectModelRepository;
 use PrestaShop\PrestaShop\Adapter\Attribute\Repository\AttributeRepository;
+use PrestaShop\PrestaShop\Adapter\Product\Validate\CombinationValidator;
 use PrestaShop\PrestaShop\Core\Domain\Language\ValueObject\LanguageId;
 use PrestaShop\PrestaShop\Core\Domain\Product\Combination\Exception\CannotAddCombinationException;
 use PrestaShop\PrestaShop\Core\Domain\Product\Combination\Exception\CannotDeleteCombinationException;
@@ -64,36 +65,83 @@ class CombinationRepository extends AbstractObjectModelRepository
     private $attributeRepository;
 
     /**
+     * @var CombinationValidator
+     */
+    private $combinationValidator;
+
+    /**
      * @param Connection $connection
      * @param string $dbPrefix
      * @param AttributeRepository $attributeRepository
+     * @param CombinationValidator $combinationValidator
      */
     public function __construct(
         Connection $connection,
         string $dbPrefix,
-        AttributeRepository $attributeRepository
+        AttributeRepository $attributeRepository,
+        CombinationValidator $combinationValidator
     ) {
         $this->connection = $connection;
         $this->dbPrefix = $dbPrefix;
         $this->attributeRepository = $attributeRepository;
+        $this->combinationValidator = $combinationValidator;
+    }
+
+    /**
+     * @param CombinationId $combinationId
+     *
+     * @return Combination
+     *
+     * @throws CombinationNotFoundException
+     */
+    public function get(CombinationId $combinationId): Combination
+    {
+        /** @var Combination $combination */
+        $combination = $this->getObjectModel(
+            $combinationId->getValue(),
+            Combination::class,
+            CombinationNotFoundException::class
+        );
+
+        return $combination;
     }
 
     /**
      * @param ProductId $productId
+     * @param bool $isDefault
      *
      * @return Combination
      *
      * @throws CoreException
      */
-    public function create(ProductId $productId): Combination
+    public function create(ProductId $productId, bool $isDefault): Combination
     {
         $combination = new Combination();
         $combination->id_product = $productId->getValue();
-        $combination->default_on = false;
+        $combination->default_on = $isDefault;
 
         $this->addObjectModel($combination, CannotAddCombinationException::class);
 
         return $combination;
+    }
+
+    /**
+     * @param Combination $combination
+     * @param array $updatableProperties
+     * @param int $errorCode
+     *
+     * @throws CoreException
+     * @throws CannotAddCombinationException
+     */
+    public function partialUpdate(Combination $combination, array $updatableProperties, int $errorCode): void
+    {
+        $this->combinationValidator->validate($combination);
+        $this->partiallyUpdateObjectModel(
+            $combination,
+            $updatableProperties,
+            CannotAddCombinationException::class,
+            $errorCode
+        );
     }
 
     /**
@@ -123,7 +171,7 @@ class CombinationRepository extends AbstractObjectModelRepository
             ->setMaxResults($limit)
         ;
 
-        return  $qb->execute()->fetchAll();
+        return $qb->execute()->fetchAll();
     }
 
     /**
@@ -281,6 +329,7 @@ class CombinationRepository extends AbstractObjectModelRepository
         $qb = $this->connection->createQueryBuilder();
         $qb->from($this->dbPrefix . 'product_attribute', 'pa')
             ->where('pa.id_product = :productId')
+            ->orderBy('id_product_attribute', 'asc')
             ->setParameter('productId', $productId->getValue())
         ;
 

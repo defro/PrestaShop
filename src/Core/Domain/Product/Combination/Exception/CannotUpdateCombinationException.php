@@ -24,20 +24,22 @@
  * @license   https://opensource.org/licenses/OSL-3.0 Open Software License (OSL 3.0)
  */
 
-namespace PrestaShop\PrestaShop\Core\Domain\Product\Combination\QueryHandler;
+declare(strict_types=1);
 
-use PrestaShop\PrestaShop\Core\Domain\Product\Combination\Query\GetProductCombinationsForEditing;
-use PrestaShop\PrestaShop\Core\Domain\Product\Combination\QueryResult\CombinationListForEditing;
+namespace PrestaShop\PrestaShop\Core\Domain\Product\Combination\Exception;
 
 /**
- * Defines contract to handle @see GetProductCombinationsForEditing query
+ * Is thrown when combination update fails
  */
-interface GetProductCombinationsForEditingHandlerInterface
+class CannotUpdateCombinationException extends CombinationException
 {
     /**
-     * @param GetProductCombinationsForEditing $query
-     *
-     * @return CombinationListForEditing
+     * When fails to update stock information of single combination
      */
-    public function handle(GetProductCombinationsForEditing $query): CombinationListForEditing;
+    public const FAILED_UPDATE_OPTIONS = 10;
+
+    /**
+     * When fails to update prices information of single combination
+     */
+    public const FAILED_UPDATE_PRICES = 20;
 }
